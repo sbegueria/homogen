@@ -1,5 +1,4 @@
-# homogen
-Change-point detection and homogenisation of daily climatic time series.
+# Change-point detection and homogenisation of daily climatic time series.
 
 Implementation of the Standard Normal Homogeneity Test (SNHT, Alexandersson 1986) to detect and correct change points in daily time series of environmental variables.
 
