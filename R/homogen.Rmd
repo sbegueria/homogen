@@ -205,7 +205,7 @@ for (s in colnames(dat)) {
                         corr='monthly', robust=FALSE)
   
   # plot the result
-  pdf (paste0('../img/tmin_homo/', id, '.pdf'))
+  pdf (paste0('../img/tmin/', id, '.pdf'))
     snht.daily.plot(can, can_new, tmes)
   dev.off()
 }
