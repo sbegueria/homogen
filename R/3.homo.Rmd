@@ -1,0 +1,219 @@
+---
+title: |
+      **Inhomogeneity detection and correction on daily observational climate data series in Spain**
+subtitle: 'Dataset, 1961-2020'
+author: Santiago Beguería, Fergus Reig
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  html_document:
+    df_print: paged 
+    highlight: tango
+    number_sections: yes
+    theme: readable
+    toc: yes
+    fig_caption: yes
+    toc_float: true
+    collapsed: false
+  pdf_document:
+    fig_caption: yes
+    highlight: zenburn
+    toc: yes
+    toc_depth: 4
+abstract: |
+  .
+---
+
+# Introduction
+
+```{r setup, include=FALSE}
+# Global options
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+# Dependencies (and install packages, if needed)
+if (!require('pacman')) install.packages('pacman')
+pacman::p_load(sp, rgdal, chron, dplyr)
+
+# Source snht functions - ESTO DEBERÍA SUSTITUIRSE POR INSTALAR EL PAQUETE
+source('./functions_snht.r')
+#library(devtools)
+#install_github('lcsc/gap_filling@pkg_transform', auth_token = "XXXXXXXXXXXXXXX")
+
+# Projections
+prj_geo <- '+proj=longlat +datum=WGS84 +no_defs'
+prj_utm <- '+proj=utm +zone=30 +ellps=intl +towgs84=-87,-98,-121,0,0,0,0 +units=m +no_defs'
+
+# A shapefile with a map of Spain with provinces - FALTA UNO CON CANARIAS
+provs_main <- readOGR('../data_raw/sig', layer='provs_main')
+#provs_can <- readOGR('../data_raw/sig', layer='provs_can')
+```
+
+
+Standard Normal Homogeneity Test (SNHT)
+
+The standard normal homogeneity test (SNHT) can be used to detect 
+inhomogeneities in hydrological, climatological or any other time series
+(Alexandersson 1986).
+
+Three main functions are available (functions_snht.r):
+
+* `snht()` detects a single change point in a test series and tests for
+its statistical significance.
+* `snht.Q()` can be used to build a test series suited to apply the SNHT
+from one candidate time series and several auxiliary ones.
+* `snht.daily()` uses the two functions above to apply the SNHT to a
+daily time series. The function applies the procedure recursively and corrects
+the found inhomogeneities, until no more significant change points are found.
+
+There are two auxiliary functions:
+
+* `snht.plot()` produces a diagnostic plot with the output of a call to
+`snht()`.
+* `snht.daily.plot()` produces diagnostic plots with the output of a call to
+`snht.daily()`.
+
+
+In this notebook we apply the procedure to time series of minimum temperature.
+
+
+----
+
+# Minimum temperature
+
+The data consists on the series that were filled-in in the previous step of
+the data process. Therefore, only a reduced number of series will be used.
+Those series are all serially complete, or very close to 100%.
+
+The test function must decide which series to use for constructing a
+reference series for each candidate. The distance matrix represents a ranking
+of the series, so the closest n stations will be used. Here we shall use the
+correlation distance.
+
+
+## Input data
+
+```{r echo=FALSE}
+# Read station metadata
+sts <- read.table('../data_raw/data_coor/tmin.csv', sep=';', header=TRUE)
+colnames(sts) <- c('id', 'name', 'alt', 'utm_x', 'utm_y', 'lon', 'lat', 'prov')
+sts$prov <- as.factor(sts$prov)
+
+# Read original (quality-controlled) data
+dat_ori <- read.table(file='../data_raw/data_sort/tmin.csv.gz', header=TRUE,
+                  sep=';', check.names=FALSE)
+tmes_ori <- seq(from=as.Date(rownames(dat_ori)[1], format='%d/%b/%Y'),
+            to=as.Date(rev(rownames(dat_ori))[1], format='%d/%b/%Y'),
+            by='day')
+dat_ori <- dat_ori %>% 
+  dplyr::filter(tmes_ori >= as.Date('1961-01-01') &
+                  tmes_ori <= as.Date('2022-12-31'))
+
+# Read filled data
+dat_fil <- read.table(file='../data/tmin_filled.csv.gz', header=TRUE,
+                  sep=';', check.names=FALSE)
+
+# Check the dimensions of the two matrices
+nrow(dat_ori) ==  nrow(dat_fil) # must be TRUE
+
+# Check that station identifiers correspond between the two objects
+sum(!(colnames(dat_ori) %in% sts$id)) # must be 0
+sum(!(colnames(dat_fil) %in% sts$id)) # must be 0
+
+# Cut to common columns, and sort both objects equally
+sts <- sts[sts$id %in% colnames(dat_fil),]
+sts <- sts[order(sts$id),]
+dat_fil <- dat_fil[, order(colnames(dat_fil))]
+dat_ori <- dat_ori[, colnames(dat_fil)]
+sum(names(dat_fil) != names(dat_ori)) # must be 0
+
+# A vector of dates corresponding to the observations
+tmes <- seq(as.Date('1961-01-01'), as.Date('2022-12-31'), by='day')
+tmes_ym <- as.character(tmes, format='%Y-%m')
+yeas <- as.character(tmes, format='%Y')
+mons <- as.character(tmes, format='%m')
+weeks <- as.character(tmes, format='%V')
+days <- as.character(tmes, format='%d')
+
+# Read or compute a distance matrix
+f <- '../data/tmin_distance.RData'
+if (!file.exists(f)) {
+  
+  # correlation distance matrix; reversed, so lower is better
+  # correlation of candidate stations against all stations
+  w <- sts$cand
+  system.time(crr <- -cor(dat, dat[,w], use='pairwise'))
+  #  sec
+  crr[crr==-1] <- NA # nullify self correlations
+  dim(crr)
+  
+  # make the matrix square
+  dst <- matrix(NA, nrow=ncol(dat), ncol=ncol(dat))
+  colnames(dst) <- rownames(dst) <- colnames(dat)
+  dst[,w] <- crr
+  
+  save(dst, file=f)
+
+} else {
+  
+  load(f)
+
+}
+# cut dst to the same stations in dat_fil
+dst <- dst[, colnames(dat_fil)]
+
+# Show stations in a map
+stsSp <- sts
+coordinates(stsSp) <- c('utm_x','utm_y')
+
+plot(provs_main, axes=TRUE, cex.axis=0.75)
+plot(stsSp, add=TRUE, col='red', pch=19, cex=0.25)
+title('Min. temperature station network')
+```
+
+
+
+
+## Apply the test
+
+The following code applies the SNHT test recursively to all the time series in
+the data set.
+
+```{r}
+for (s in colnames(dat)) {
+  
+  # identify the series
+  w <- which(colnames(dat) == s)
+  id <- sts$id[w]
+  nam <- paste0(id,', ', sts$name[w], ' (', sts$prov[w], ')' )
+  
+  # determine candidate series
+  can <- dat %>% 
+    dplyr::select(any_of(s))
+  can <- can[,1]
+  
+  # determine auxiliary series (5 best correlated)
+  aux <- dst %>% 
+    as.data.frame() %>% 
+    dplyr::select(any_of(s)) %>% 
+    dplyr::filter(rownames(.) %in% colnames(dat)) %>% 
+    dplyr::arrange(1) %>% 
+    dplyr::filter(row_number() %in% 1:5)
+  aux <- dat[,colnames(dat) %in% rownames(aux)]
+  
+  # apply SNHT test, and correction
+  can_new <- snht.daily(can, aux, tmes, max.loops=10, method='diff',
+                        excl=4*365, clevel=90, cl.factor=365,
+                        corr='monthly', robust=FALSE)
+  
+  # plot the result
+  pdf (paste0('../img/tmin_homo/', id, '.pdf'))
+    snht.daily.plot(can, can_new, tmes)
+  dev.off()
+}
+```
+
+
+
+
+
+
+
